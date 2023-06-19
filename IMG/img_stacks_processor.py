@@ -51,11 +51,11 @@ def save_contour_points(contour_points, save_path):
 def generate_contour_points_from_imgs():
     # Path to the tiff file
     img_stack_path = r"D:\projects\Files\data\6007\6007_segmentation_midsaggital.tif"
-    img_save_dir = r"D:\projects\IMG\contour_imgs"
-    points_save_dir = r"D:\projects\IMG\contour_points"
+    img_save_dir = r"contour_imgs"
+    points_save_dir = r"contour_points"
 
     save_contour_imgs = False
-    max_sample_steps = 10
+    max_sample_steps = 20
     for sample_step in range(max_sample_steps):
         coordinates = get_contour_points(img_stack_path, sample_step, img_save_dir, save_contour_imgs)
         file_name = "contour_points" + str(sample_step) + ".xyz"
