@@ -18,6 +18,7 @@ class ContourPointsGenerator:
         self.work_dir_ = r""
         self.img_stacks_name_ = ""
         self.img_stack_path_ = ""
+        self.ori_img_stack_path_ = ''
 
         self.img_stacks_ = []
         self.dense_contour_stacks_ = []
@@ -94,6 +95,28 @@ class ContourPointsGenerator:
 
                 # print("----------------- mask img dim ", mask.shape)
                 self.img_stacks_.append(mask)
+
+    def read_ori_img_stacks(self):
+        images = []
+        self.origin_img_stacks_ = []
+        print("read origin img : ", self.ori_img_stack_path_)
+        ret, images = cv2.imreadmulti(self.ori_img_stack_path_, images,cv2.IMREAD_ANYDEPTH)
+        self.origin_img_stacks_ = images
+        # if len(images) > 1:
+        #     print("Read image stacks successful, img num: ",len(images) )
+        #     self.height_, self.width_ = images[0].shape
+        #     resize_dim = (self.width_ // self.img_scale_ , self.height_ // self.img_scale_)
+        #     for img in images:
+        #         if self.img_resize_: 
+        #             img = cv2.resize(img, resize_dim, interpolation= cv2.INTER_LINEAR)
+        #         # print("----------------- resize img dim ", resize_img.shape)
+                
+        #         im_mask = np.ma.masked_greater(img, 0.5)
+        #         mask = np.ma.getmask(im_mask)
+        #         mask = np.uint8(mask) * 255
+
+        #         # print("----------------- mask img dim ", mask.shape)
+        #         self.img_stacks_.append(mask)
             
     def get_contour_points_cv(self):    
         for img in self.img_stacks_:
@@ -342,7 +365,64 @@ class ContourPointsGenerator:
 
             self.opt_cv_contour_stacks_.append(opt_pts)
 
+    def cal_contour_points_tangent_and_normals(self):
+        self.contour_tangent_stacks_ = []
+        self.contour_normal_stacks_ = []
 
+        p_normal = (0, 0, 1)
+        for i in range(len(self.opt_cv_contour_stacks_)):
+            cur_contour = self.opt_cv_contour_stacks_[i]
+            cur_tangent_list = []
+            cur_normal_list  = []
+
+            for j in range(len(cur_contour)):
+                pre_id = (j - 1) % len(cur_contour)
+                aft_id = (j + 1) % len(cur_contour)
+                # print("id : ", pre_id, aft_id)
+                tangent_x = cur_contour[aft_id][0] - cur_contour[pre_id][0]
+                tangent_y = cur_contour[aft_id][1] - cur_contour[pre_id][1]
+                # print("tangent : ", tangent_x, tangent_y)
+                cur_tangent = (tangent_x, tangent_y, 0)
+                cur_tangent_list.append(cur_tangent)
+                cur_normal = np.cross(p_normal, cur_tangent)
+                cur_normal = cur_normal / np.sqrt(cur_normal.dot(cur_normal))
+                cur_normal_list.append(cur_normal)
+            self.contour_normal_stacks_.append(cur_normal_list)
+            self.contour_tangent_stacks_.append(cur_tangent_list)
+    
+    def CalGradient(self):
+        self.contour_gradientX_stacks_ = []
+        self.contour_gradientY_stacks_ = []
+        self.contour_gradientZ_stacks_ = []
+        img_num = len(self.origin_img_stacks_)
+        for i in range(img_num):
+            pre_id = max(0, i -1)
+            aft_id = min(img_num, i + 1)
+            gradient_z = (self.origin_img_stacks_[aft_id] - self.origin_img_stacks_[pre_id])/2
+            self.contour_gradientZ_stacks_.append(gradient_z)
+
+            cur_img = self.origin_img_stacks_[i]
+            row, col = cur_img.shape
+            left_x = np.zeros_like(cur_img)
+            left_x[:,1:] = cur_img[:, :col-1]
+            left_x[:, 0] = cur_img[:, 0]
+
+            right_x = np.zeros_like(cur_img)
+            right_x[:,:col-1] = cur_img[:, 1:]
+            right_x[:, col-1] = cur_img[:, col-1]
+            gradient_x = (right_x - left_x) / 2.0
+            self.contour_gradientX_stacks_.append(gradient_x)
+            
+            up_y = np.zeros_like(cur_img)
+            up_y[1:, :] = cur_img[:row-1, :]
+            up_y[0,  :] = cur_img[0, :]
+
+            dw_y = np.zeros_like(cur_img)
+            dw_y[: row-1, :] = cur_img[1:,:]
+            dw_y[:, row-1]   = cur_img[row-1, :]
+            gradient_y = (dw_y - up_y) / 2.0
+            self.contour_gradientY_stacks_.append(gradient_y)
+            
     def save_cv_contour_points(self):
         save_path = os.path.join(self.points_save_dir_, "cv_contour_" + str(self.sample_step_) + ".xyz" )
         i = 0
@@ -376,6 +456,126 @@ class ContourPointsGenerator:
                     f.write('\n')
                 i += self.sample_step_ + 1
         print("Successfully save cv contour 3D points to file: ", save_path)
+    
+    def save_opt_cv_contour_tangents(self):
+        save_dir = os.path.join(self.points_save_dir_, "contour_tangent_" + str(self.kd_dist_thred_))
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        save_path = os.path.join(save_dir, "contour_tangent_" + str(self.sample_step_) + ".xyz" )
+        i = 0
+        with open(save_path, 'w') as f:    
+            while i < len(self.contour_tangent_stacks_):
+                for p in self.contour_tangent_stacks_[i]:
+                    px = p[0]
+                    py = p[1]
+                    f.write(str(px) + " ")
+                    f.write(str(py) + " ")
+                    f.write(str(p[2]))
+                    f.write('\n')
+                i += self.sample_step_ + 1
+        print("Successfully save cv contour tangent to file: ", save_path)
+
+    def save_opt_cv_contour_points_and_normals(self):
+        save_dir = os.path.join(self.points_save_dir_, "contour_normal_" + str(self.kd_dist_thred_))
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        save_path = os.path.join(save_dir, "contour_normal_" + str(self.sample_step_) + ".obj")
+        i = 0
+        with open(save_path, 'w') as f: 
+            p_num = 0   
+            while i < len(self.opt_cv_contour_stacks_):
+                cur_contour_points = self.opt_cv_contour_stacks_[i]
+                cur_contour_normals = self.contour_normal_stacks_[i]
+                for p_id in range(len(cur_contour_points)):
+                    p = cur_contour_points[p_id]
+                    pn = cur_contour_normals[p_id]
+                    p_num += 1
+                    f.write("v ")
+                    f.write(str(p[0]) + " ")
+                    f.write(str(p[1]) + " ")
+                    f.write(str(i))
+                    f.write('\n')
+                    f.write("v ")
+                    f.write(str(p[0] + 3 * pn[0]) + " ")
+                    f.write(str(p[1] + 3 * pn[1]) + " ")
+                    f.write(str(i + 3 * pn[2]))
+                    f.write('\n')
+                i += self.sample_step_ + 1
+            for id in range(p_num):
+                f.write("l ")
+                f.write(str(2 *id + 1) + " ")
+                f.write(str(2 *id + 2) )
+                f.write('\n')
+        print("Successfully save cv contour normal to file: ", save_path)
+
+    def save_opt_cv_contour_normals(self):
+        save_dir = os.path.join(self.points_save_dir_, "contour_normal_" + str(self.kd_dist_thred_))
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        save_path = os.path.join(save_dir, "contour_normal_" + str(self.sample_step_) + ".xyz")
+        i = 0
+        with open(save_path, 'w') as f: 
+            p_num = 0   
+            while i < len(self.opt_cv_contour_stacks_):
+                
+                cur_contour_normals = self.contour_normal_stacks_[i]
+                for p_id in range(len(cur_contour_normals)):
+                    
+                    pn = cur_contour_normals[p_id]
+                    p_num += 1
+                    f.write(str(pn[0]) + " ")
+                    f.write(str(pn[1]) + " ")
+                    f.write(str(pn[2]))
+                    f.write('\n')
+                i += self.sample_step_ + 1
+        print("Successfully save cv contour normal to file: ", save_path)
+
+    def save_opt_cv_contour_points_gradients(self):
+        save_dir = os.path.join(self.points_save_dir_, "contour_gradient_" + str(self.kd_dist_thred_))
+        if not os.path.exists(save_dir):
+            os.mkdir(save_dir)
+        save_path = os.path.join(save_dir, "contour_gradient_" + str(self.sample_step_) + ".obj")
+        i = 0
+        with open(save_path, 'w') as f: 
+            p_num = 0   
+            while i < len(self.opt_cv_contour_stacks_):
+                cur_contour_points = self.opt_cv_contour_stacks_[i]
+                cg_x = self.contour_gradientX_stacks_[i]
+                cg_y = self.contour_gradientY_stacks_[i]
+                cg_z = self.contour_gradientZ_stacks_[i]
+                gradients = []
+                max_norm = 0
+                for p_id in range(len(cur_contour_points)):
+                    p = cur_contour_points[p_id]
+                    gx = cg_x[int(p[0]), int(p[1])]
+                    gy = cg_y[int(p[0]), int(p[1])]
+                    gz = cg_z[int(p[0]), int(p[1])]
+                    gradients.append((gx, gy, gz))
+                    norm = np.sqrt(gx*gx + gy*gy + gz*gz)
+                    if max_norm < norm:
+                        max_norm = norm
+
+                for p_id in range(len(cur_contour_points)):
+                    p = cur_contour_points[p_id]
+                    pn = gradients[p_id] 
+                    p_num += 1
+                    f.write("v ")
+                    f.write(str(p[0]) + " ")
+                    f.write(str(p[1]) + " ")
+                    f.write(str(i))
+                    f.write('\n')
+                    f.write("v ")
+                    f.write(str(p[0] + 10 * pn[0] / max_norm) + " ")
+                    f.write(str(p[1] + 10 * pn[1]/ max_norm)  + " ")
+                    f.write(str(i + 10 * pn[2]/ max_norm))
+                    f.write('\n')
+                i += self.sample_step_ + 1
+            for id in range(p_num):
+                f.write("l ")
+                f.write(str(2 *id + 1) + " ")
+                f.write(str(2 *id + 2) )
+                f.write('\n')
+        print("Successfully save cv contour gradient to file: ", save_path)
 
     def save_cv_contour_points(self):
         save_path = os.path.join(self.points_save_dir_, "cv_contour_" + str(self.sample_step_) + ".xyz" )
@@ -421,8 +621,8 @@ class ContourPointsGenerator:
                     f.write('\n')
                 i += self.sample_step_ + 1
 
-
         print("Successfully save cv contour 3D points to file: ", save_path)
+
 
     def save_dense_contour_points(self):
         save_path = os.path.join(self.points_save_dir_, "dense_contour_" + str(self.sample_step_) + ".xyz" )
@@ -461,6 +661,8 @@ class ContourPointsGenerator:
         print("Set work dir Finished!" )
         self.read_img_stacks()
         print("Read img stacks Finished!" )
+        self.read_ori_img_stacks()
+        print("Read original img stacks Finished!" )
         self.get_contour_points_cv()
         print("Get opencv contour points Finished!" )
         
@@ -473,13 +675,19 @@ class ContourPointsGenerator:
                 print("Sample dense contour points Finished!" )
         # self.save_contour_imgs()
         print("Save contour iamges Finished!" )
-        dist_sample_list = [3, 5, 8, 10, 12, 15]
+        dist_sample_list = [3, 5, 7, 9]
         # dist_sample_list = [8]
-        max_sample_steps = 20
+        max_sample_steps = 10
+
+        cal_gradient = True
+        if cal_gradient:
+            self.CalGradient()
+        
         for dist_step in dist_sample_list:
             self.kd_dist_thred_ = dist_step 
             self.optimize_cv_contour_points2()
             self.save_opt_cv_contour_imgs()
+            self.cal_contour_points_tangent_and_normals()
             
             print("Optimize opencv contour points Finished!" )
             for sample_step in range(max_sample_steps):
@@ -491,14 +699,41 @@ class ContourPointsGenerator:
                 
                 self.save_opt_cv_contour_points()
                 self.save_opt_cv_contour_as_planes()
+                self.save_opt_cv_contour_points_and_normals()
+                self.save_opt_cv_contour_tangents()
+
+def run_bateches():
+    work_dir = "/home/jjxia/Documents/projects/All_Elbow/elbow_data/segmentations_tiffstack"
+    origin_img_dir = "/home/jjxia/Documents/projects/All_Elbow/elbow_data/scans_tiffstacks"
+    file_names = os.listdir(work_dir)
+    out_dir = "/home/jjxia/Documents/projects/All_Elbow/contours_1"
+
+    if not os.path.exists(out_dir):
+        os.mkdir(out_dir)
+
+    for file_name in file_names:
+        file_path = os.path.join(work_dir, file_name)
+        out_sub_dir = os.path.join(out_dir, file_name.split('_')[0])
+        origin_img_name =  file_name.split('_')[0] + "_scan_midsaggital.tif"
+        origin_img_path = os.path.join(origin_img_dir, origin_img_name)
+        if not os.path.exists(out_sub_dir):
+            os.mkdir(out_sub_dir)
+        try:
+            ptGen = ContourPointsGenerator()
+            ptGen.ori_img_stack_path_ = origin_img_path
+            ptGen(out_sub_dir, file_path)
+        except: 
+            print(file_name, " failed!")
+        
 
 
 if __name__ == "__main__":
-    ptGen = ContourPointsGenerator()
-    work_dir = "6007"
-    file_name = "6007_segmentation_midsaggital.tif"
-    ptGen(work_dir, file_name)
-
-    work_dir = "C054L"
-    file_name = "C054L_segmentation_midsaggital.tif"
+    # ptGen = ContourPointsGenerator()
+    # work_dir = "6007"
+    # file_name = "6007_segmentation_midsaggital.tif"
     # ptGen(work_dir, file_name)
+
+    # work_dir = "C054L"
+    # file_name = "C054L_segmentation_midsaggital.tif"
+    # ptGen(work_dir, file_name)
+    run_bateches()
